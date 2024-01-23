@@ -18,9 +18,9 @@ P = 0
 I = 0
 D = 0
 
-Kp = 5
-Ki = 3
-Kd = 10
+Kp = 1
+Ki = 0.0001
+Kd = 1
 
 leftmotor.start()
 rightmotor.start()
@@ -37,6 +37,8 @@ while True:
     D = Gx
 
     PID = P + I + D
+
+    print(P, I, D, PID)
     
     leftmotor.set(PID)
     rightmotor.set(PID)
