@@ -1,9 +1,7 @@
 #include <Arduino.h>
-// #include <MPU6050_tockn.h>
 #include <Wire.h>
 #include <Servo.h>
 #include <fastStepper.h>
-// #include <SimpleKalmanFilter.h>
 #include <BluetoothSerial.h>
 
 #define LEN 19
@@ -44,6 +42,8 @@ portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 fastStepper motLeft(LSTEP, LDIR, 0, true, motLeftTimerFunction);
 fastStepper motRight(RSTEP, RDIR, 1, false, motRightTimerFunction);
 
+bool mode = true;
+
 // MPU6050 mpu6050(Wire);
 Servo myservo = Servo();
 // SimpleKalmanFilter anglekalman(3, 1, 0.01);
@@ -56,21 +56,23 @@ float GAcX, GAcY, GAcZ; // Convert accelerometer to gravity value
 float Cal_GyX,Cal_GyY,Cal_GyZ; // Pitch, Roll & Yaw of Gyroscope applied time factor
 float acc_pitch, acc_roll, acc_yaw; // Pitch, Roll & Yaw from Accelerometer
 float angle_pitch, angle_roll, angle_yaw; // Angle of Pitch, Roll, & Yaw
-float alpha = 0.998; // Complementary constant
+float alpha = 0.99; // Complementary constant
 
-float Kp = 14, Ki = 0.0002, Kd = 30;
+float Kp = 0, Ki = 0.00000, Kd = 0;
 float P, I, D, PID;
 float error = 0, lastError = 0;
 
-int leftAngle = 30, rightAngle = 180 - 32;
+int leftAngle = 20, rightAngle = 180 - 22;
 
 float VL = 0, VR = 0;
 
 int microStep = 32;
 
-float offsetAngle = 3.2;
+float offsetAngle = -3.2;
 
 String message = "";
+
+bool running = false;
 
 void IRAM_ATTR motLeftTimerFunction() {
   portENTER_CRITICAL_ISR(&timerMux);
@@ -96,32 +98,61 @@ void setup() {
   motRight.speed = 0;
   motLeft.update();
   motRight.update();
-  delay(360);
+  delay(110);
   Wire.begin();
   init_MPU6050();
-
-  // mpu6050.begin();
-  // mpu6050.calcGyroOffsets(true, 100,300);
+  delay(110);
 
 }
 
 void loop() {
-    if (SerialBT.available()) {
+  if (SerialBT.available()) {
     message = SerialBT.readStringUntil('\n'); // read from serial or bluetooth
     Serial.println(message);  
     if (message[0] == 'J'){
-    leftAngle = (message.substring(1).toInt() - 90)/5;
-    myservo.write(LSERVO, leftAngle);
-  } else if (message[0] == 'K'){
-    rightAngle = (message.substring(1).toInt() - 90)/5;
-    myservo.write(RSERVO, rightAngle);
-  } 
+      if (mode)
+      Kp = map(message.substring(1).toInt(), 0, 180, -20, 20);
+      else 
+      offsetAngle = map(message.substring(1).toInt(), 0, 180, -10, 10);
+      // myservo.write(LSERVO, leftAngle);
+    } else if (message[0] == 'K'){
+      if (mode)
+      Kd = map(message.substring(1).toInt(), 0, 180, -20, 20);
+      else
+      Ki = map(message.substring(1).toInt(), 0, 180, 0.0002, 0.5);
+      // myservo.write(RSERVO, rightAngle);
+    } else if (message == "M"){
+      running = true;
+    } else if (message == "m") {
+      running = false;
+    } else if (message == "X") {
+      I = 0;
+    } else if (message == "L") {
+      VL = -5;
+      VR = 5;
+    } else if (message == "R"){
+      VL = 5;
+      VR = -5;
+    } else if (message == "S") {
+      VL = 0; VR = 0;
+    } else if (message == "N") {
+      mode = true;
+    } else if (message == "n") {
+      mode = false;
+    }
   }
-  caculate_pid();
-  motLeft.speed = (PID + VL);
-  motRight.speed = -(PID + VR);
-  motLeft.update();
-  motRight.update();
+  if (running){
+    caculate_pid();
+    motLeft.speed = (PID + VL);
+    motRight.speed = -(PID + VR);
+    motLeft.update();
+    motRight.update();
+  }else{
+    motLeft.speed = 0;
+    motRight.speed = 0;
+    motLeft.update();
+    motRight.update();
+  }
 }
 
 void caculate_pid (){
@@ -139,20 +170,10 @@ void caculate_pid (){
   GyY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
   GyZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
 
-  // Raw data of accelerometer corrected by offset value
-//  AcX -= MPU6050_AXOFFSET;
-//  AcY -= MPU6050_AYOFFSET;
-//  AcZ -= MPU6050_AZOFFSET;
-
-  // Convert accelerometer to gravity value
   GAcX = (float) AcX / 4096.0;
   GAcY = (float) AcY / 4096.0;
   GAcZ = (float) AcZ / 4096.0;
 
-  // Calculate Pitch, Roll & Yaw from Accelerometer value
-  // Reference are 
-  // https://engineering.stackexchange.com/questions/3348/calculating-pitch-yaw-and-roll-from-mag-acc-and-gyro-data
-  // https://www.dfrobot.com/wiki/index.php/How_to_Use_a_Three-Axis_Accelerometer_for_Tilt_Sensing
   acc_pitch = atan ((GAcY - (float)MPU6050_AYOFFSET/4096.0) / sqrt(GAcX * GAcX + GAcZ * GAcZ)) * 57.29577951; // 180 / PI = 57.29577951
   acc_roll = - atan ((GAcX - (float)MPU6050_AXOFFSET/4096.0) / sqrt(GAcY * GAcY + GAcZ * GAcZ)) * 57.29577951; 
   //acc_yaw = atan ((GAcZ - (float)MPU6050_AZOFFSET/4096.0) / sqrt(GAcX * GAcX + GAcZ * GAcZ)) * 57.29577951;
@@ -172,48 +193,29 @@ void caculate_pid (){
   angle_roll = alpha * (((float)(GyY - MPU6050_GYOFFSET) * 0.000244140625) + angle_roll) + (1 - alpha) * acc_roll;
   angle_yaw += (float)(GyZ - MPU6050_GZOFFSET) * 0.000244140625; // Accelerometer doesn't have yaw value
   
-  // Print raw of accelerometer & gyroscope reflected cumulative time factor
-//  Serial.print("AcX = "); Serial.print(AcX);
-//  Serial.print(" | AcY = "); Serial.print(AcY);
-//  Serial.print(" | AcZ = "); Serial.println(AcZ);
-//  Serial.print(" | Tmp = "); Serial.print(Tmp/340.00+36.53);  //equation for temperature in degrees C from datasheet
-//  Serial.print(" | Cal_GyX = "); Serial.print(Cal_GyX);
-//  Serial.print(" | Cal_GyY = "); Serial.print(Cal_GyY);
-//  Serial.print(" | Cal_GyZ = "); Serial.println(Cal_GyZ);
 
-  // Print calculated value of Pitch, Roll & Yaw from Accelerometer value
-//  Serial.print(" | acc_pitch = "); Serial.print(acc_pitch);
-//  Serial.print(" | acc_roll = "); Serial.print(acc_roll);
-//  Serial.print(" | acc_yaw = "); Serial.println(acc_yaw);
-
-  // Print value of Pitch, Roll & Yaw reflected Complementary Filter
-//  Serial.print(" | angle_pitch = "); Serial.print(angle_pitch);
-//  Serial.print(" | angle_roll = "); Serial.print(angle_roll);
-//  Serial.print(" | angle_yaw = "); Serial.println(angle_yaw);
-
-  Serial.print("Cal_GyX = "); Serial.print(Cal_GyX);
-  Serial.print(" acc_pitch = "); Serial.print(acc_pitch);
-  Serial.print(" angle_pitch = "); Serial.println(angle_pitch);
+  // Serial.println(angle_pitch);
 
   // Sampling Timer
 
 
   // mpu6050.update();
   error = angle_pitch - offsetAngle;
+  // error = (error*error*error)/50 + 6/8*error;
   // error = mpu6050.getAngleX() - offsetAngle;
-  if (error > -15 && error < 15){
+  if (error > -40 && error < 40){
     P = Kp * error;
-    I = constrain(I + Ki * error, -10, 10);
+    I = constrain(I + Ki * error, -100, 100);
 
     D = Kd*(error - lastError);
     PID = P + I + D;
     lastError = error;
-    PID = constrain(PID, -200, 200);
-    Serial.print(acc_pitch);
-    Serial.print(' ');
+    PID = constrain(PID, -500, 500);
+    // Serial.print(acc_pitch);
+    // Serial.print(' ');
     Serial.print(angle_pitch);
     Serial.print(' ');
-    Serial.println(error);
+    Serial.println(PID);
   } else {
     PID = 0;
   }
