@@ -25,11 +25,11 @@
 #define MPU6050_GYOFFSET -42
 #define MPU6050_GZOFFSET -26
 
-
 void IRAM_ATTR motLeftTimerFunction();
 void IRAM_ATTR motRightTimerFunction();
 void caculate_pid ();
 void init_MPU6050();
+float mymap(float, float, float, float, float);
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
 #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
@@ -44,31 +44,35 @@ fastStepper motRight(RSTEP, RDIR, 1, false, motRightTimerFunction);
 
 bool mode = true;
 
-// MPU6050 mpu6050(Wire);
 Servo myservo = Servo();
-// SimpleKalmanFilter anglekalman(3, 1, 0.01);
 
-long sampling_timer;
-const int MPU_addr=0x68;  // I2C address of the MPU-6050
+long sampling_timer;    // Serial.print(motLeft.getStep());
+    // Serial.print(' ');
+    // Serial.print(motRight.getStep());
+    // Serial.print(' ');
+const int MPU_addr=0x68;  
 
 int16_t AcX,AcY,AcZ,Tmp,GyX,GyY,GyZ; // Raw data of MPU6050
 float GAcX, GAcY, GAcZ; // Convert accelerometer to gravity value
 float Cal_GyX,Cal_GyY,Cal_GyZ; // Pitch, Roll & Yaw of Gyroscope applied time factor
 float acc_pitch, acc_roll, acc_yaw; // Pitch, Roll & Yaw from Accelerometer
 float angle_pitch, angle_roll, angle_yaw; // Angle of Pitch, Roll, & Yaw
-float alpha = 0.99; // Complementary constant
+float alpha = 0.996; // Complementary constant
 
-float Kp = 0, Ki = 0.00000, Kd = 0;
+float Kp = 3., Ki = 0.48, Kd = 10; // at 30*: 3. 0.48 10
 float P, I, D, PID;
 float error = 0, lastError = 0;
 
-int leftAngle = 20, rightAngle = 180 - 22;
-
+int leftAngle = 30, rightAngle = 30;
+long v_timer;
 float VL = 0, VR = 0;
 
-int microStep = 32;
+int microStep = 16;
 
-float offsetAngle = -3.2;
+float offsetAngle = 2;
+float useOffsetAngle = 2;
+
+bool isForward = false, isBackward = false;
 
 String message = "";
 
@@ -88,63 +92,102 @@ void IRAM_ATTR motRightTimerFunction() {
 void setup() {
   Serial.begin(115200);
   SerialBT.begin("MipiRobot");
+
   motLeft.init();
   motRight.init();
   motLeft.microStep = microStep;
   motRight.microStep = microStep;
+
   myservo.write(LSERVO, leftAngle);
-  myservo.write(RSERVO, rightAngle);
+  myservo.write(RSERVO, 180-rightAngle);
+
   motLeft.speed = 0;
   motRight.speed = 0;
   motLeft.update();
   motRight.update();
-  delay(110);
+  
+
   Wire.begin();
   init_MPU6050();
-  delay(110);
 
 }
 
 void loop() {
   if (SerialBT.available()) {
-    message = SerialBT.readStringUntil('\n'); // read from serial or bluetooth
+    message = SerialBT.readStringUntil('\n'); 
     Serial.println(message);  
     if (message[0] == 'J'){
-      if (mode)
-      Kp = map(message.substring(1).toInt(), 0, 180, -20, 20);
-      else 
-      offsetAngle = map(message.substring(1).toInt(), 0, 180, -10, 10);
+      // if (mode)
+      // Kp = mymap(message.substring(1).toInt(), 0, 180, -10, 10);
+      // else 
+      offsetAngle = mymap(message.substring(1).toInt(), 0, 180, -5, 5);
+      useOffsetAngle = offsetAngle;
+      // leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
       // myservo.write(LSERVO, leftAngle);
+      // offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -2, 2);
     } else if (message[0] == 'K'){
-      if (mode)
-      Kd = map(message.substring(1).toInt(), 0, 180, -20, 20);
-      else
-      Ki = map(message.substring(1).toInt(), 0, 180, 0.0002, 0.5);
-      // myservo.write(RSERVO, rightAngle);
+      // if (mode)
+      // Kd = mymap(message.substring(1).toInt(), 0, 180, -30, 30);
+      // else
+      // Ki = mymap(message.substring(1).toInt(), 0, 180, 0.0002, 1.5);
+      rightAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
+      myservo.write(RSERVO, 180 - rightAngle);
+      // offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.5, 1.5);
+      leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
+      myservo.write(LSERVO, leftAngle);
+      offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.2, 1.8);
+      Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 0.5);
     } else if (message == "M"){
       running = true;
+      I = 0;
     } else if (message == "m") {
       running = false;
     } else if (message == "X") {
       I = 0;
     } else if (message == "L") {
-      VL = -5;
-      VR = 5;
+      VL = -10;
+      VR = 10;
     } else if (message == "R"){
-      VL = 5;
-      VR = -5;
-    } else if (message == "S") {
-      VL = 0; VR = 0;
+      VL = 10;
+      VR = -10;
+    } else if (message == "S") {   
+      VL = 0; VR = 0; 
+      isForward = false;
+      isBackward = false;
     } else if (message == "N") {
       mode = true;
     } else if (message == "n") {
       mode = false;
+    } else if (message == "F"){
+      isForward = true;
+    } else if (message == "B") {
+      isBackward = true;
     }
   }
+  if (micros() - v_timer > 50000){
+    if (isForward){
+      useOffsetAngle = constrain(useOffsetAngle + 0.5, offsetAngle, offsetAngle + 2);
+    } else if (isBackward){
+      useOffsetAngle = constrain(useOffsetAngle - 0.5, offsetAngle - 2, offsetAngle);
+    } else {
+      if (useOffsetAngle > offsetAngle) {
+        useOffsetAngle = constrain(useOffsetAngle - 0.5, offsetAngle, offsetAngle + 2);
+      }
+      else {
+        useOffsetAngle = constrain(useOffsetAngle + 0.5, offsetAngle - 2, offsetAngle);
+      }
+    } 
+
+    v_timer = micros();
+  }
+  
+  
+
+  caculate_pid();
+
   if (running){
-    caculate_pid();
     motLeft.speed = (PID + VL);
-    motRight.speed = -(PID + VR);
+    motRight.speed = (PID + VR);
     motLeft.update();
     motRight.update();
   }else{
@@ -153,6 +196,8 @@ void loop() {
     motLeft.update();
     motRight.update();
   }
+  while(micros() - sampling_timer < 2000); //
+  sampling_timer = micros(); //Reset the sampling timer  
 }
 
 void caculate_pid (){
@@ -161,7 +206,7 @@ void caculate_pid (){
   Wire.beginTransmission(MPU_addr);
   Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
   Wire.endTransmission(false);
-  Wire.requestFrom(MPU_addr,14,true);  // request a total of 14 registers
+  Wire.requestFrom(MPU_addr,14);  // request a total of 14 registers
   AcX=Wire.read()<<8|Wire.read();  // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)     
   AcY=Wire.read()<<8|Wire.read();  // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
   AcZ=Wire.read()<<8|Wire.read();  // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
@@ -170,9 +215,12 @@ void caculate_pid (){
   GyY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
   GyZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
 
+
+ // Convert accelerometer to gravity value
   GAcX = (float) AcX / 4096.0;
   GAcY = (float) AcY / 4096.0;
   GAcZ = (float) AcZ / 4096.0;
+
 
   acc_pitch = atan ((GAcY - (float)MPU6050_AYOFFSET/4096.0) / sqrt(GAcX * GAcX + GAcZ * GAcZ)) * 57.29577951; // 180 / PI = 57.29577951
   acc_roll = - atan ((GAcX - (float)MPU6050_AXOFFSET/4096.0) / sqrt(GAcY * GAcY + GAcZ * GAcZ)) * 57.29577951; 
@@ -194,34 +242,37 @@ void caculate_pid (){
   angle_yaw += (float)(GyZ - MPU6050_GZOFFSET) * 0.000244140625; // Accelerometer doesn't have yaw value
   
 
-  // Serial.println(angle_pitch);
+  error = angle_pitch - useOffsetAngle;
 
-  // Sampling Timer
-
-
-  // mpu6050.update();
-  error = angle_pitch - offsetAngle;
-  // error = (error*error*error)/50 + 6/8*error;
-  // error = mpu6050.getAngleX() - offsetAngle;
-  if (error > -40 && error < 40){
+  if (error > -30 && error < 30){
     P = Kp * error;
-    I = constrain(I + Ki * error, -100, 100);
+    I = constrain(I + Ki * error, -500, 500);
 
     D = Kd*(error - lastError);
     PID = P + I + D;
     lastError = error;
     PID = constrain(PID, -500, 500);
-    // Serial.print(acc_pitch);
-    // Serial.print(' ');
-    Serial.print(angle_pitch);
+
+    Serial.print(Kp);
     Serial.print(' ');
-    Serial.println(PID);
+    Serial.print(Ki);
+    Serial.print(' ');
+    Serial.print(Kd);
+    Serial.print(' ');
+    Serial.print(PID);
+    Serial.print(' ');
+    Serial.print(useOffsetAngle);
+    Serial.print(' ');
+    // Serial.print(motLeft.getStep());
+    // Serial.print(' ');
+    // Serial.print(motRight.getStep());
+    // Serial.print(' ');
+    Serial.println(angle_pitch);
   } else {
     PID = 0;
   }
 
-  while(micros() - sampling_timer < 4000); //
-  sampling_timer = micros(); //Reset the sampling timer  
+
 }
 
 
@@ -267,4 +318,14 @@ void init_MPU6050(){
   //Wire.write(0x05);     // Accel BW 10Hz, Delay 13.8ms / Gyro BW 10Hz, Delay 13.4ms, Fs 1KHz 
   //Wire.write(0x06);     // Accel BW 5Hz, Delay 19ms / Gyro BW 5Hz, Delay 18.6ms, Fs 1KHz 
   Wire.endTransmission(true);
+}
+
+float mymap(float x, float in_min, float in_max, float out_min, float out_max){
+  if (in_min >= in_max){
+    return 0;
+  } 
+  const float run = in_max - in_min;
+  const float rise = out_max - out_min;
+  const float delta = x - in_min;
+  return (delta * rise) / run + out_min;
 }
