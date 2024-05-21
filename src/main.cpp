@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <Servo.h>
 #include <fastStepper.h>
+#include <mpu_6050.h>
 #include <BluetoothSerial.h>
 
 #define LEN 19
@@ -18,17 +19,10 @@
 #define reverseLeftMotor false
 #define reverseRightMotor false
 
-#define MPU6050_AXOFFSET 158
-#define MPU6050_AYOFFSET 9
-#define MPU6050_AZOFFSET -91
-#define MPU6050_GXOFFSET 19
-#define MPU6050_GYOFFSET -42
-#define MPU6050_GZOFFSET -26
-
 void IRAM_ATTR motLeftTimerFunction();
 void IRAM_ATTR motRightTimerFunction();
-void caculate_pid ();
-void init_MPU6050();
+void caculate_pid_left();
+void caculate_pid_right();
 float mymap(float, float, float, float, float);
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
@@ -38,6 +32,7 @@ float mymap(float, float, float, float, float);
 BluetoothSerial SerialBT;
 
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+MPU6050 mpu6050(Wire);
 
 fastStepper motLeft(LSTEP, LDIR, 0, true, motLeftTimerFunction);
 fastStepper motRight(RSTEP, RDIR, 1, false, motRightTimerFunction);
@@ -46,21 +41,12 @@ bool mode = true;
 
 Servo myservo = Servo();
 
-long sampling_timer;    // Serial.print(motLeft.getStep());
-    // Serial.print(' ');
-    // Serial.print(motRight.getStep());
-    // Serial.print(' ');
-const int MPU_addr=0x68;  
+long sampling_timer;  
 
-int16_t AcX,AcY,AcZ,Tmp,GyX,GyY,GyZ; // Raw data of MPU6050
-float GAcX, GAcY, GAcZ; // Convert accelerometer to gravity value
-float Cal_GyX,Cal_GyY,Cal_GyZ; // Pitch, Roll & Yaw of Gyroscope applied time factor
-float acc_pitch, acc_roll, acc_yaw; // Pitch, Roll & Yaw from Accelerometer
-float angle_pitch, angle_roll, angle_yaw; // Angle of Pitch, Roll, & Yaw
-float alpha = 0.996; // Complementary constant
-
-float Kp = 3., Ki = 0.48, Kd = 10; // at 30*: 3. 0.48 10
-float P, I, D, PID;
+float Kp = 7., Ki = 1.2, Kd = 12; // at 30*: 3. 0.48 10
+float Km = -0.0045, Kc = 0.02;
+float Pl, Il, Dl, Ml, Cl, PIDl, MCl;
+float Pr, Ir, Dr, Mr, Cr, PIDr, MCr;
 float error = 0, lastError = 0;
 
 int leftAngle = 30, rightAngle = 30;
@@ -73,6 +59,8 @@ float offsetAngle = 2;
 float useOffsetAngle = 2;
 
 bool isForward = false, isBackward = false;
+long target_step_left = 0;
+long target_step_right = 0;
 
 String message = "";
 
@@ -108,7 +96,8 @@ void setup() {
   
 
   Wire.begin();
-  init_MPU6050();
+  mpu6050.begin(0.996);
+  // init_MPU6050();
 
 }
 
@@ -117,33 +106,43 @@ void loop() {
     message = SerialBT.readStringUntil('\n'); 
     Serial.println(message);  
     if (message[0] == 'J'){
-      // if (mode)
-      // Kp = mymap(message.substring(1).toInt(), 0, 180, -10, 10);
-      // else 
-      offsetAngle = mymap(message.substring(1).toInt(), 0, 180, -5, 5);
-      useOffsetAngle = offsetAngle;
-      // leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
-      // myservo.write(LSERVO, leftAngle);
-      // offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -2, 2);
+      if (mode)
+        Km = mymap(message.substring(1).toInt(), 0, 180, -0.01, 0.01); // 0.0041
+      else {
+        Kp = mymap(message.substring(1).toInt(), 0, 180, -10, 10); // 0.0041
+
+        // offsetAngle = mymap(message.substring(1).toInt(), 0, 180, -5, 5);
+        // useOffsetAngle = offsetAngle;
+      }
+      
     } else if (message[0] == 'K'){
-      // if (mode)
-      // Kd = mymap(message.substring(1).toInt(), 0, 180, -30, 30);
-      // else
-      // Ki = mymap(message.substring(1).toInt(), 0, 180, 0.0002, 1.5);
-      rightAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
-      myservo.write(RSERVO, 180 - rightAngle);
-      // offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.5, 1.5);
-      leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
-      myservo.write(LSERVO, leftAngle);
-      offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.2, 1.8);
-      Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 0.5);
+      if (mode)
+        Kc = mymap(message.substring(1).toInt(), 0, 180, -0.02, 0.02);
+      else {
+        Kd = mymap(message.substring(1).toInt(), 0, 180, -20, 20);
+
+        // rightAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
+        // myservo.write(RSERVO, 180 - rightAngle);
+        // leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
+        // myservo.write(LSERVO, leftAngle);
+        // offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.2, 1.8);
+        // Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 0.5);
+      }
+      
     } else if (message == "M"){
       running = true;
-      I = 0;
+      Ir = 0;
+      Il = 0;
     } else if (message == "m") {
       running = false;
     } else if (message == "X") {
-      I = 0;
+      Ir = 0;
+      Il = 0;
+      target_step_left = 0;
+      target_step_right = 0;
+      motLeft.setStep(0);
+      motRight.setStep(0);
+
     } else if (message == "L") {
       VL = -10;
       VR = 10;
@@ -180,144 +179,96 @@ void loop() {
 
     v_timer = micros();
   }
-  
-  
 
-  caculate_pid();
+  mpu6050.update();
 
-  if (running){
-    motLeft.speed = (PID + VL);
-    motRight.speed = (PID + VR);
-    motLeft.update();
-    motRight.update();
-  }else{
-    motLeft.speed = 0;
-    motRight.speed = 0;
-    motLeft.update();
-    motRight.update();
-  }
-  while(micros() - sampling_timer < 2000); //
-  sampling_timer = micros(); //Reset the sampling timer  
-}
+  caculate_pid_left();
+  caculate_pid_right();
+  lastError = error;
 
-void caculate_pid (){
-
-  // Read raw data of MPU6050
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU_addr,14);  // request a total of 14 registers
-  AcX=Wire.read()<<8|Wire.read();  // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)     
-  AcY=Wire.read()<<8|Wire.read();  // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
-  AcZ=Wire.read()<<8|Wire.read();  // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
-  Tmp=Wire.read()<<8|Wire.read();  // 0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
-  GyX=Wire.read()<<8|Wire.read();  // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
-  GyY=Wire.read()<<8|Wire.read();  // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
-  GyZ=Wire.read()<<8|Wire.read();  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
-
-
- // Convert accelerometer to gravity value
-  GAcX = (float) AcX / 4096.0;
-  GAcY = (float) AcY / 4096.0;
-  GAcZ = (float) AcZ / 4096.0;
-
-
-  acc_pitch = atan ((GAcY - (float)MPU6050_AYOFFSET/4096.0) / sqrt(GAcX * GAcX + GAcZ * GAcZ)) * 57.29577951; // 180 / PI = 57.29577951
-  acc_roll = - atan ((GAcX - (float)MPU6050_AXOFFSET/4096.0) / sqrt(GAcY * GAcY + GAcZ * GAcZ)) * 57.29577951; 
-  //acc_yaw = atan ((GAcZ - (float)MPU6050_AZOFFSET/4096.0) / sqrt(GAcX * GAcX + GAcZ * GAcZ)) * 57.29577951;
-  acc_yaw = atan (sqrt(GAcX * GAcX + GAcZ * GAcZ) / (GAcZ - (float)MPU6050_AZOFFSET/4096.0)) * 57.29577951; 
-
-  // Calculate Pitch, Roll & Yaw from Gyroscope value reflected cumulative time factor
-  Cal_GyX += (float)(GyX - MPU6050_GXOFFSET) * 0.000244140625; // 2^15 / 2000 = 16.384, 250Hz, 1 /(250Hz * 16.384LSB)
-  Cal_GyY += (float)(GyY - MPU6050_GYOFFSET) * 0.000244140625; // 2^15 / 2000 = 16.384, 250Hz, 1 /(250Hz * 16.384LSB)
-  Cal_GyZ += (float)(GyZ - MPU6050_GZOFFSET) * 0.000244140625; // 2^15 / 2000 = 16.384, 250Hz, 1 /(250Hz * 16.384LSB)
-
-  // Calculate Pitch, Roll & Yaw by Complementary Filter
-  // Reference is http://www.geekmomprojects.com/gyroscopes-and-accelerometers-on-a-chip/
-  // Filtered Angle = α × (Gyroscope Angle) + (1 − α) × (Accelerometer Angle)     
-  // where α = τ/(τ + Δt)   and   (Gyroscope Angle) = (Last Measured Filtered Angle) + ω×Δt
-  // Δt = sampling rate, τ = time constant greater than timescale of typical accelerometer noise
-  angle_pitch = alpha * (((float)(GyX - MPU6050_GXOFFSET) * 0.000244140625) + angle_pitch) + (1 - alpha) * acc_pitch;
-  angle_roll = alpha * (((float)(GyY - MPU6050_GYOFFSET) * 0.000244140625) + angle_roll) + (1 - alpha) * acc_roll;
-  angle_yaw += (float)(GyZ - MPU6050_GZOFFSET) * 0.000244140625; // Accelerometer doesn't have yaw value
-  
-
-  error = angle_pitch - useOffsetAngle;
-
-  if (error > -30 && error < 30){
-    P = Kp * error;
-    I = constrain(I + Ki * error, -500, 500);
-
-    D = Kd*(error - lastError);
-    PID = P + I + D;
-    lastError = error;
-    PID = constrain(PID, -500, 500);
-
+    Serial.print(motLeft.getStep());
+    Serial.print(' ');
+    Serial.print(target_step_left);
+    Serial.print('\t');
     Serial.print(Kp);
     Serial.print(' ');
     Serial.print(Ki);
     Serial.print(' ');
     Serial.print(Kd);
+    Serial.print('\t');
+    Serial.print(Km,8);
     Serial.print(' ');
-    Serial.print(PID);
+    Serial.print(Kc,8);
+    Serial.print('\t');
+    Serial.print(MCl);
+    Serial.print(' ');
+    Serial.print(PIDl);
     Serial.print(' ');
     Serial.print(useOffsetAngle);
     Serial.print(' ');
-    // Serial.print(motLeft.getStep());
-    // Serial.print(' ');
-    // Serial.print(motRight.getStep());
-    // Serial.print(' ');
-    Serial.println(angle_pitch);
-  } else {
-    PID = 0;
-  }
+    Serial.println(mpu6050.getAnglePitch());
 
+  while(micros() - sampling_timer < 2000); //
+  sampling_timer = micros(); //Reset the sampling timer  
+}
+
+void caculate_pid_left (){
+
+  error = mpu6050.getAnglePitch() - useOffsetAngle;
+
+  if (error > -30 && error < 30){
+    Ml = Km*(target_step_left - motLeft.getStep());
+    Cl = Kc*motLeft.speed;
+    MCl = Ml + Cl;
+    MCl = constrain(MCl, -10, 10);
+    error += MCl;
+
+    Pl = Kp * error;
+    Il = constrain(Il + Ki * error, -500, 500);
+    Dl = Kd*(error - lastError);
+    PIDl = Pl + Il + Dl;
+ 
+    PIDl = constrain(PIDl, -500, 500);
+  } else {
+    PIDl = 0;
+  }
+  if (running){
+    motLeft.speed = (PIDl + VL);
+    motLeft.update();
+  }else{
+    motLeft.speed = 0;
+    motLeft.update();
+  }
 
 }
 
+void caculate_pid_right (){
+  error = mpu6050.getAnglePitch() - useOffsetAngle;
+  if (error > -30 && error < 30){
 
-void init_MPU6050(){
-  //MPU6050 Initializing & Reset
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x6B);  // PWR_MGMT_1 register
-  Wire.write(0);     // set to zero (wakes up the MPU-6050)
-  Wire.endTransmission(true);
+    Mr = Km*(target_step_right - motRight.getStep());
+    Cr = Kc*motRight.speed;
+    MCr = Mr + Cr;
+    MCr = constrain(MCr, -10, 10);
+    error += MCr;
 
-  //MPU6050 Clock Type
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x6B);  // PWR_MGMT_1 register
-  Wire.write(0x03);     // Selection Clock 'PLL with Z axis gyroscope reference'
-  Wire.endTransmission(true);
+    Pr = Kp * error;
+    Ir = constrain(Ir + Ki * error, -500, 500);
+    Dr = Kd*(error - lastError);
+    PIDr = Pr + Ir + Dr;
+    
+    PIDr = constrain(PIDl, -500, 500);
+  } else {
+    PIDl = 0;
+  }
+  if (running){
+    motRight.speed = (PIDr + VR);
+    motRight.update();
+  }else{
+    motRight.speed = 0;
+    motRight.update();
+  }
 
-  //MPU6050 Gyroscope Configuration Setting
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x1B);  // Gyroscope Configuration register
-  //Wire.write(0x00);     // FS_SEL=0, Full Scale Range = +/- 250 [degree/sec]
-  //Wire.write(0x08);     // FS_SEL=1, Full Scale Range = +/- 500 [degree/sec]
-  //Wire.write(0x10);     // FS_SEL=2, Full Scale Range = +/- 1000 [degree/sec]
-  Wire.write(0x18);     // FS_SEL=3, Full Scale Range = +/- 2000 [degree/sec]
-  Wire.endTransmission(true);
-
-  //MPU6050 Accelerometer Configuration Setting
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x1C);  // Accelerometer Configuration register
-  //Wire.write(0x00);     // AFS_SEL=0, Full Scale Range = +/- 2 [g]
-  //Wire.write(0x08);     // AFS_SEL=1, Full Scale Range = +/- 4 [g]
-  Wire.write(0x10);     // AFS_SEL=2, Full Scale Range = +/- 8 [g]
-  //Wire.write(0x18);     // AFS_SEL=3, Full Scale Range = +/- 10 [g]
-  Wire.endTransmission(true);
-
-  //MPU6050 DLPF(Digital Low Pass Filter)
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x1A);  // DLPF_CFG register
-  Wire.write(0x00);     // Accel BW 260Hz, Delay 0ms / Gyro BW 256Hz, Delay 0.98ms, Fs 8KHz 
-  //Wire.write(0x01);     // Accel BW 184Hz, Delay 2ms / Gyro BW 188Hz, Delay 1.9ms, Fs 1KHz 
-  //Wire.write(0x02);     // Accel BW 94Hz, Delay 3ms / Gyro BW 98Hz, Delay 2.8ms, Fs 1KHz 
-  //Wire.write(0x03);     // Accel BW 44Hz, Delay 4.9ms / Gyro BW 42Hz, Delay 4.8ms, Fs 1KHz 
-  //Wire.write(0x04);     // Accel BW 21Hz, Delay 8.5ms / Gyro BW 20Hz, Delay 8.3ms, Fs 1KHz 
-  //Wire.write(0x05);     // Accel BW 10Hz, Delay 13.8ms / Gyro BW 10Hz, Delay 13.4ms, Fs 1KHz 
-  //Wire.write(0x06);     // Accel BW 5Hz, Delay 19ms / Gyro BW 5Hz, Delay 18.6ms, Fs 1KHz 
-  Wire.endTransmission(true);
 }
 
 float mymap(float x, float in_min, float in_max, float out_min, float out_max){
