@@ -18,6 +18,7 @@ fastStepper::fastStepper(uint8_t stepPin, uint8_t dirPin, uint8_t timerNo, boole
   _timerNo = timerNo;
   _revDir = revDir;
   timerFun = f;
+  timerMux = portMUX_INITIALIZER_UNLOCKED;
 }
 
 void fastStepper::init() {

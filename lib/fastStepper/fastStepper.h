@@ -15,7 +15,7 @@ To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/
 
 #include <Arduino.h>
 
-extern portMUX_TYPE timerMux;
+// extern portMUX_TYPE timerMux;
 
 class fastStepper {
 public:
@@ -28,7 +28,7 @@ public:
 
   float speed = 0;
   float maxSpeed = 3000;
-
+  portMUX_TYPE timerMux;
   uint8_t microStep;
 private:
   void (*timerFun)();
@@ -43,7 +43,7 @@ private:
   float lastSpeed = 0.0;
   boolean timerEnable = 0;
   // static void (*timerFunction)();
-  // static const portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+  
 };
 
 

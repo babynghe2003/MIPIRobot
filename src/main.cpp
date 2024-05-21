@@ -33,7 +33,7 @@ float mymap(float, float, float, float, float);
 
 BluetoothSerial SerialBT;
 
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+// portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 MPU6050 mpu6050(Wire);
 
 fastStepper motLeft(LSTEP, LDIR, 0, true, motLeftTimerFunction);
@@ -46,13 +46,13 @@ Servo myservo = Servo();
 long sampling_timer;  
 
 // at 0* 11.56 1. 15.00        -0.00100000 -0.00001222 0.02233333
-float Kp = 11.5, Ki = 1.2, Kd = 15; // at 30*: 11.5 10 15
-float Km = -0.00355, Kc = 0.029, Kt = -0.000024; // at 30* Km = -0.00355, Kc = 0.029, Kt = -0.000024;
+float Kp = 11.5, Ki = 1.2, Kd = 20; // at 30*: 11.5 10 20
+float Km = -0.00295, Kc = 0.029, Kt = -0.000024; // at 30* Km = -0.00355, Kc = 0.029, Kt = -0.000024;
 float Pl, Il, Dl, Ml, Cl, PIDl, MCl, Tl;
 float Pr, Ir, Dr, Mr, Cr, PIDr, MCr, Tr;
 float error = 0, lastError = 0, lastLastError=0;
 
-int leftAngle = 0, rightAngle = 00;
+int leftAngle = 30, rightAngle = 30;
 long v_timer;
 float VL = 0, VR = 0;
 
@@ -70,14 +70,14 @@ String message = "";
 bool running = false;
 
 void IRAM_ATTR motLeftTimerFunction() {
-  portENTER_CRITICAL_ISR(&timerMux);
+  portENTER_CRITICAL_ISR(&motLeft.timerMux);
   motLeft.timerFunction();
-  portEXIT_CRITICAL_ISR(&timerMux);
+  portEXIT_CRITICAL_ISR(&motLeft.timerMux);
 }
 void IRAM_ATTR motRightTimerFunction() {
-  portENTER_CRITICAL_ISR(&timerMux);
+  portENTER_CRITICAL_ISR(&motRight.timerMux);
   motRight.timerFunction();
-  portEXIT_CRITICAL_ISR(&timerMux);
+  portEXIT_CRITICAL_ISR(&motRight.timerMux);
 }
 
 void setup() {
@@ -112,25 +112,30 @@ void loop() {
       if (mode)
         Km = mymap(message.substring(1).toInt(), 0, 180, -0.01, 0.01); // 0.0041
       else {
-        Kt = mymap(message.substring(1).toInt(), 0, 180, -0.0001, 0.0001); // 0.0041
+        Kp = mymap(message.substring(1).toInt(), 0, 180, -15, 15); // 0.0041
 
         // offsetAngle = mymap(message.substring(1).toInt(), 0, 180, -5, 5);
         // useOffsetAngle = offsetAngle;
       }
       
     } else if (message[0] == 'K'){
-      if (mode)
-        Kc = mymap(message.substring(1).toInt(), 0, 180, -0.03, 0.03);
-      else {
-        Kp = mymap(message.substring(1).toInt(), 0, 180, -20, 20);
+      // if (mode)
+      //   Kc = mymap(message.substring(1).toInt(), 0, 180, -0.03, 0.03);
+      // else {
+      //   Kp = mymap(message.substring(1).toInt(), 0, 180, -20, 20);
 
-        // rightAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
-        // myservo.write(RSERVO, 180 - rightAngle);
-        // leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
-        // myservo.write(LSERVO, leftAngle);
-        // offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.2, 1.8);
-        // Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 0.5);
-      }
+        rightAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
+        myservo.write(RSERVO, 180 - rightAngle);
+        leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
+        myservo.write(LSERVO, leftAngle);
+        offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.2, 1.8);
+        Kp = mymap((leftAngle + rightAngle)/2, 0, 30, 11.5, 12);
+        Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 1.2);
+        Km = mymap((leftAngle + rightAngle)/2, 0, 30, -0.00100000, -0.0035);
+        Kc = mymap((leftAngle + rightAngle)/2, 0, 30, 0.02233333, 0.026);
+        Kt = mymap((leftAngle + rightAngle)/2, 0, 30, -0.00001222, -0.000024);
+        // Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 1.2);
+      // }
       
     } else if (message == "M"){
       running = true;
@@ -149,11 +154,15 @@ void loop() {
       motRight.setStep(0);
 
     } else if (message == "L") {
-      target_step_left -=100;
-      target_step_right+=100;
+      // target_step_left -=100;
+      // target_step_right+=100;
+      VL = -10;
+      VR = 10;
     } else if (message == "R"){
-      target_step_left +=100;
-      target_step_right-=100;
+      // target_step_left +=100;
+      // target_step_right-=100;
+      VL = 10;
+      VR = -10;
     } else if (message == "S") {   
       VL = 0; VR = 0; 
       isForward = false;
@@ -163,27 +172,23 @@ void loop() {
     } else if (message == "n") {
       mode = false;
     } else if (message == "F"){
+      isForward = true;
       target_step_left +=100;
-      target_step_right+=100;
+      target_step_right +=100;
     } else if (message == "B") {
+      isBackward = true;
       target_step_left -=100;
       target_step_right-=100;
     }
   }
-  if (micros() - v_timer > 50000){
+  if (micros() - v_timer > 500){
     if (isForward){
-      useOffsetAngle = constrain(useOffsetAngle + 0.5, offsetAngle, offsetAngle + 2);
+      target_step_left += 10;
+      target_step_right += 10;
     } else if (isBackward){
-      useOffsetAngle = constrain(useOffsetAngle - 0.5, offsetAngle - 2, offsetAngle);
-    } else {
-      if (useOffsetAngle > offsetAngle) {
-        useOffsetAngle = constrain(useOffsetAngle - 0.5, offsetAngle, offsetAngle + 2);
-      }
-      else {
-        useOffsetAngle = constrain(useOffsetAngle + 0.5, offsetAngle - 2, offsetAngle);
-      }
+      target_step_left -=10;
+      target_step_right-=10;
     } 
-
     v_timer = micros();
   }
 
@@ -216,7 +221,11 @@ void loop() {
     Serial.print(' ');
     Serial.print(useOffsetAngle);
     Serial.print(' ');
-    Serial.println(mpu6050.getAnglePitch());
+    Serial.print(mpu6050.getAnglePitch());
+    Serial.print('\t');
+    Serial.print(motLeft.getStep());
+    Serial.print(' ');
+    Serial.println(motRight.getStep());
 
   while(micros() - sampling_timer < 2000); //
   sampling_timer = micros(); //Reset the sampling timer  
