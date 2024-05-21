@@ -19,6 +19,8 @@
 #define reverseLeftMotor false
 #define reverseRightMotor false
 
+#define MAX_ACC 10
+
 void IRAM_ATTR motLeftTimerFunction();
 void IRAM_ATTR motRightTimerFunction();
 void caculate_pid_left();
@@ -43,13 +45,14 @@ Servo myservo = Servo();
 
 long sampling_timer;  
 
-float Kp = 7., Ki = 1.2, Kd = 12; // at 30*: 3. 0.48 10
-float Km = -0.0045, Kc = 0.02;
-float Pl, Il, Dl, Ml, Cl, PIDl, MCl;
-float Pr, Ir, Dr, Mr, Cr, PIDr, MCr;
-float error = 0, lastError = 0;
+// at 0* 11.56 1. 15.00        -0.00100000 -0.00001222 0.02233333
+float Kp = 11.5, Ki = 1.2, Kd = 15; // at 30*: 11.5 10 15
+float Km = -0.00355, Kc = 0.029, Kt = -0.000024; // at 30* Km = -0.00355, Kc = 0.029, Kt = -0.000024;
+float Pl, Il, Dl, Ml, Cl, PIDl, MCl, Tl;
+float Pr, Ir, Dr, Mr, Cr, PIDr, MCr, Tr;
+float error = 0, lastError = 0, lastLastError=0;
 
-int leftAngle = 30, rightAngle = 30;
+int leftAngle = 0, rightAngle = 00;
 long v_timer;
 float VL = 0, VR = 0;
 
@@ -109,7 +112,7 @@ void loop() {
       if (mode)
         Km = mymap(message.substring(1).toInt(), 0, 180, -0.01, 0.01); // 0.0041
       else {
-        Kp = mymap(message.substring(1).toInt(), 0, 180, -10, 10); // 0.0041
+        Kt = mymap(message.substring(1).toInt(), 0, 180, -0.0001, 0.0001); // 0.0041
 
         // offsetAngle = mymap(message.substring(1).toInt(), 0, 180, -5, 5);
         // useOffsetAngle = offsetAngle;
@@ -117,9 +120,9 @@ void loop() {
       
     } else if (message[0] == 'K'){
       if (mode)
-        Kc = mymap(message.substring(1).toInt(), 0, 180, -0.02, 0.02);
+        Kc = mymap(message.substring(1).toInt(), 0, 180, -0.03, 0.03);
       else {
-        Kd = mymap(message.substring(1).toInt(), 0, 180, -20, 20);
+        Kp = mymap(message.substring(1).toInt(), 0, 180, -20, 20);
 
         // rightAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
         // myservo.write(RSERVO, 180 - rightAngle);
@@ -138,17 +141,19 @@ void loop() {
     } else if (message == "X") {
       Ir = 0;
       Il = 0;
+      Tl = 0;
+      Tr = 0;
       target_step_left = 0;
       target_step_right = 0;
       motLeft.setStep(0);
       motRight.setStep(0);
 
     } else if (message == "L") {
-      VL = -10;
-      VR = 10;
+      target_step_left -=100;
+      target_step_right+=100;
     } else if (message == "R"){
-      VL = 10;
-      VR = -10;
+      target_step_left +=100;
+      target_step_right-=100;
     } else if (message == "S") {   
       VL = 0; VR = 0; 
       isForward = false;
@@ -158,9 +163,11 @@ void loop() {
     } else if (message == "n") {
       mode = false;
     } else if (message == "F"){
-      isForward = true;
+      target_step_left +=100;
+      target_step_right+=100;
     } else if (message == "B") {
-      isBackward = true;
+      target_step_left -=100;
+      target_step_right-=100;
     }
   }
   if (micros() - v_timer > 50000){
@@ -185,6 +192,7 @@ void loop() {
   caculate_pid_left();
   caculate_pid_right();
   lastError = error;
+  lastLastError = lastError;
 
     Serial.print(motLeft.getStep());
     Serial.print(' ');
@@ -197,6 +205,8 @@ void loop() {
     Serial.print(Kd);
     Serial.print('\t');
     Serial.print(Km,8);
+    Serial.print(' ');
+    Serial.print(Kt,8);
     Serial.print(' ');
     Serial.print(Kc,8);
     Serial.print('\t');
@@ -219,13 +229,15 @@ void caculate_pid_left (){
   if (error > -30 && error < 30){
     Ml = Km*(target_step_left - motLeft.getStep());
     Cl = Kc*motLeft.speed;
-    MCl = Ml + Cl;
+    Tl += Kt*(target_step_left - motLeft.getStep());
+    Tl = constrain(Tl, -10, 10);
+    MCl = Ml + Cl+Tl;
     MCl = constrain(MCl, -10, 10);
     error += MCl;
 
     Pl = Kp * error;
     Il = constrain(Il + Ki * error, -500, 500);
-    Dl = Kd*(error - lastError);
+    Dl = Kd*(((error - lastError)+(lastError - lastLastError))/2);
     PIDl = Pl + Il + Dl;
  
     PIDl = constrain(PIDl, -500, 500);
@@ -233,7 +245,7 @@ void caculate_pid_left (){
     PIDl = 0;
   }
   if (running){
-    motLeft.speed = (PIDl + VL);
+    motLeft.speed = constrain((PIDl + VL), motLeft.speed - MAX_ACC, motLeft.speed + MAX_ACC);
     motLeft.update();
   }else{
     motLeft.speed = 0;
@@ -248,13 +260,15 @@ void caculate_pid_right (){
 
     Mr = Km*(target_step_right - motRight.getStep());
     Cr = Kc*motRight.speed;
-    MCr = Mr + Cr;
+    Tr += Kt*(target_step_right - motRight.getStep());
+    Tr = constrain(Tl, -10, 10);
+    MCr = Mr + Cr +Tl;
     MCr = constrain(MCr, -10, 10);
     error += MCr;
 
     Pr = Kp * error;
     Ir = constrain(Ir + Ki * error, -500, 500);
-    Dr = Kd*(error - lastError);
+    Dr = Kd*Kd*(((error - lastError)+(lastError - lastLastError))/2);
     PIDr = Pr + Ir + Dr;
     
     PIDr = constrain(PIDl, -500, 500);
@@ -262,7 +276,7 @@ void caculate_pid_right (){
     PIDl = 0;
   }
   if (running){
-    motRight.speed = (PIDr + VR);
+    motRight.speed = constrain((PIDr + VR), motRight.speed - MAX_ACC, motRight.speed + MAX_ACC);
     motRight.update();
   }else{
     motRight.speed = 0;
