@@ -129,10 +129,10 @@ void loop() {
         leftAngle = mymap(message.substring(1).toInt(), 0, 180, 0, 30);
         myservo.write(LSERVO, leftAngle);
         offsetAngle = mymap((leftAngle + rightAngle)/2, 0, 30, -1.2, 1.8);
-        Kp = mymap((leftAngle + rightAngle)/2, 0, 30, 11.5, 12);
+        Kp = mymap((leftAngle + rightAngle)/2, 0, 30, 13.5, 12);
         Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 1.2);
-        Km = mymap((leftAngle + rightAngle)/2, 0, 30, -0.00100000, -0.0035);
-        Kc = mymap((leftAngle + rightAngle)/2, 0, 30, 0.02233333, 0.026);
+        Km = mymap((leftAngle + rightAngle)/2, 0, 30, -0.000900000, -0.0029);
+        Kc = mymap((leftAngle + rightAngle)/2, 0, 30, 0.02233333, 0.029);
         Kt = mymap((leftAngle + rightAngle)/2, 0, 30, -0.00001222, -0.000024);
         // Ki = mymap((leftAngle + rightAngle)/2, 0, 30, 1, 1.2);
       // }

@@ -1,14 +1,3 @@
-/*
-A simple, lightweight library for running stepper motors via a hardware timer on an ESP32.
-Can generate steps up to a few hundred kHz.
-
-Wouter Klop
-wouter@elexperiment.nl
-For updates, see elexperiment.nl
-
-This work is licensed under the Creative Commons Attribution-ShareAlike 4.0 International License.
-To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/4.0/
-*/
 
 #include "fastStepper.h"
 
@@ -48,8 +37,6 @@ void IRAM_ATTR fastStepper::timerFunction() {
 // // Also, we want plenty resolution, to prevent discrete steps in stepper speed.
 
 
-// Use speed as input variable?
-// Use static member for microstep pins?
 void fastStepper::update() {
   float absSpeed;
   uint32_t absSpeedInt;
